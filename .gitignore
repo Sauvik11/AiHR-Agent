@@ -7,7 +7,6 @@ venv/
 
 # Just in case different Python versions
 *.cpython-*
-=======
 _pycache_/
 *.py[cod]
 
