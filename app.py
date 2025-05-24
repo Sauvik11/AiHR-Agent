@@ -704,5 +704,46 @@ def trigger_email_processing():
         print(f"Error processing emails: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+@app.route('/api/scrape_linkedin', methods=['POST'])
+def scrape_linkedin():
+    data = request.json
+    keyword = data.get('keyword', '')
+    print("the keyworddd11111",keyword)
+
+    if not keyword:
+        return jsonify({'error': 'Keyword required'}), 400
+
+    try:
+        # Assume this script returns a list of dicts with LinkedIn profile data
+        from linkedin_scraper import get_linkedin_profiles
+        print("the key222222",keyword)
+
+        profiles = get_linkedin_profiles(keyword)
+
+        db = mysql.connector.connect(**db_config)
+        cursor = db.cursor()
+
+        for profile in profiles:
+            cursor.execute("""
+                INSERT INTO lead_profiles (name, title, location, contact, source_keyword)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                profile.get('name'),
+                profile.get('title'),
+                profile.get('location'),
+                profile.get('contact'),
+                keyword
+            ))
+        
+        db.commit()
+        cursor.close()
+        db.close()
+
+        return jsonify({'status': 'Scraped successfully', 'profiles': profiles})
+    
+    except Exception as e:
+        print("Error scraping LinkedIn:", str(e))
+        return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
     app.run(debug=True)
