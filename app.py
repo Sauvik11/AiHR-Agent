@@ -3,12 +3,13 @@ from flask import Flask, jsonify, render_template, request, redirect, url_for
 import mysql.connector
 import PyPDF2
 import requests
-import re
-from datetime import datetime
 import json
+from datetime import datetime
 from dotenv import load_dotenv
 import os
 from auth import get_auth_url, get_token
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # Load environment variables from .env file
 load_dotenv()
@@ -34,22 +35,27 @@ print("ol_CLIENT_ID:", os.getenv('ol_CLIENT_ID'))
 print("ol_CLIENT_SECRET:", "****" if os.getenv('ol_CLIENT_SECRET') else "None")
 print("ol_REDIRECT_URI:", os.getenv('ol_REDIRECT_URI'))
 print("SCOPE:", os.getenv('SCOPE'))
-print("OPENROUTER_API_KEY:",   os.getenv('OPENROUTER_API_KEY'))
+print("OPENAI_API_KEY:", "****" if os.getenv('OPENAI_API_KEY') else "None")
+print("OPENAI_MODEL:", os.getenv('OPENAI_MODEL', 'gpt-4o-mini'))
 print("Database Configuration:", db_config)
 
 # Validate db_config
 if not all([db_config['user'], db_config['database']]):
     raise ValueError("Missing required MySQL configuration (user or database) in .env file")
 
-# OpenRouter API Configuration from environment variables
-OPENROUTER_API_KEY = os.getenv('OPENROUTER_API_KEY')
+# OpenAI API Configuration from environment variables
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-4o-mini')
+OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions'
 
-OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'meta-llama/llama-3.1-8b-instruct:free')
-OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions'
+# Validate OpenAI API key
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY is not set in .env file")
 
-# Validate OpenRouter API key
-if not OPENROUTER_API_KEY:
-    raise ValueError("OPENROUTER_API_KEY is not set in .env file")
+# Create a requests session with retry logic
+session = requests.Session()
+retries = Retry(total=3, backoff_factor=1, status_forcelist=[429, 500, 502, 503, 504])
+session.mount('https://', HTTPAdapter(max_retries=retries))
 
 # Microsoft Graph Configuration with OAuth 2.0
 def connect_graph():
@@ -121,14 +127,14 @@ def extract_first_25_lines(pdf_path):
         print(f"Error extracting first 25 lines from PDF {pdf_path}: {str(e)}")
         return ''
 
-# Check if PDF is a resume using OpenRouter API
+# Check if PDF is a resume using OpenAI API
 def is_resume(text):
     if not text.strip():
         print("No text extracted for resume check, assuming not a resume")
         return False
     
     headers = {
-        'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+        'Authorization': f'Bearer {OPENAI_API_KEY}',
         'Content-Type': 'application/json'
     }
     
@@ -140,81 +146,58 @@ def is_resume(text):
     """
     
     payload = {
-        'model': OPENROUTER_MODEL,
+        'model': OPENAI_MODEL,
         'messages': [{'role': 'user', 'content': prompt}],
-        'response_format': {'type': 'json_object'}
+        'response_format': {'type': 'json_object'},
+        'max_tokens': 100
     }
     
-    try:
-        response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload)
-        response.raise_for_status()
+    for attempt in range(3):
+        try:
+            print(f"Sending OpenAI request (attempt {attempt + 1}): {json.dumps(payload, indent=2)}")
+            response = session.post(OPENAI_API_URL, headers=headers, json=payload, timeout=10)
+            print(f"OpenAI response status: {response.status_code}")
+            print(f"OpenAI headers: {json.dumps(dict(response.headers), indent=2)}")
+            
+            # Save response to file for inspection
+            response_file = f'openai_response_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt'
+            with open(response_file, 'w', encoding='utf-8') as f:
+                f.write(f"Status: {response.status_code}\n")
+                f.write(f"Headers: {json.dumps(dict(response.headers), indent=2)}\n")
+                f.write(f"Body: {response.text}")
+            print(f"Response saved to {response_file}")
+            
+            if response.status_code == 429:
+                print("Rate limit exceeded, retrying after delay")
+                time.sleep(5)
+                continue
+            response.raise_for_status()
+            content = response.json()['choices'][0]['message']['content']
+            print(f"OpenAI raw content: {content}")
+            result = json.loads(content)
+            is_resume_value = result.get('is_resume', False)
+            print(f"Extracted is_resume: {is_resume_value}")
+            return is_resume_value
+        except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
+            print(f"Error checking if document is resume (attempt {attempt + 1}): {str(e)}")
+            print(f"OpenAI raw response: {response.text[:500] if 'response' in locals() else 'No response'}...")
+            if attempt < 2:
+                time.sleep(2)
+        except Exception as e:
+            print(f"Unexpected error in is_resume (attempt {attempt + 1}): {str(e)}")
+            if attempt < 2:
+                time.sleep(2)
+    
+    print("All retry attempts failed, assuming not a resume")
+    return False
 
-        if response.headers.get('content-type', '').startswith('application/json'):
-            # The API itself might return directly parseable JSON,
-            # so we'll try that first.
-            try:
-                # Direct JSON parsing if the 'content-type' is truly json
-                content_json = response.json()
-                # Assuming the structure is choices[0].message.content which holds the JSON string
-                if 'choices' in content_json and len(content_json['choices']) > 0:
-                    model_response_content = content_json['choices'][0]['message']['content']
-                    # Now, search for the JSON object within the model's response string
-                    json_search = re.search(r'\{.*?\}', model_response_content, re.DOTALL)
-                    if json_search:
-                        json_str = json_search.group(0)
-                        result = json.loads(json_str)
-                        return result.get('is_resume', False)
-                    else:
-                        print(f"No JSON object found within the model's response content: {model_response_content[:100]}...")
-                        return False
-                else:
-                    print("Unexpected API response structure (missing 'choices' or empty).")
-                    return False
-
-            except json.JSONDecodeError:
-                # Fallback if the initial response.json() fails, meaning the content
-                # might be a string that *contains* JSON, like your example.
-                content = response.text # Get the raw text if it's not direct JSON
-
-                # Use re.search to find the JSON object anywhere in the string
-                json_search = re.search(r'\{.*?\}', content, re.DOTALL)
-                print("json_search ", json_search) # Debugging print
-                if json_search:
-                    json_str = json_search.group(0)
-                    result = json.loads(json_str)
-                    return result.get('is_resume', False)
-                else:
-                    print(f"No JSON found in content: {content[:100]}...")
-                    return False
-        else:
-            print(f"Unexpected content-type: {response.headers.get('content-type')}")
-            # Try to parse the raw text anyway, as some APIs might send json in text/plain
-            content = response.text
-            json_search = re.search(r'\{.*?\}', content, re.DOTALL)
-            if json_search:
-                json_str = json_search.group(0)
-                try:
-                    result = json.loads(json_str)
-                    return result.get('is_resume', False)
-                except json.JSONDecodeError:
-                    print(f"Content-type was not application/json, and extracted string was not valid JSON: {json_str[:100]}...")
-                    return False
-            else:
-                print(f"No JSON found in unexpected content-type: {content[:100]}...")
-                return False
-
-    except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
-        print(f"Error checking if document is resume: {str(e)}")
-        return False
-
-# Parse resume using OpenRouter API
+# Parse resume using OpenAI API
 def parse_resume(text):
     headers = {
-        'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+        'Authorization': f'Bearer {OPENAI_API_KEY}',
         'Content-Type': 'application/json'
     }
-
-    # MODIFICATION HERE: Changed qualifications to be a list of strings
+    
     prompt = f"""
     Extract the following details from the resume text below:
     - Candidate name
@@ -229,159 +212,56 @@ def parse_resume(text):
     Resume text:
     {text}
     """
-
+    
     payload = {
-        'model': OPENROUTER_MODEL,
+        'model': OPENAI_MODEL,
         'messages': [{'role': 'user', 'content': prompt}],
-        'response_format': {'type': 'json_object'}
+        'response_format': {'type': 'json_object'},
+        'max_tokens': 1500
     }
-
-    candidate = { # Initialize candidate with defaults outside try-except
+    
+    candidate = {
         'name': 'Unknown',
         'position': 'Not specified',
-        'qualifications': [], # Changed default to empty list
+        'qualifications': [],
         'experience_years': 0,
         'skills': [],
         'previous_experience': [],
         'interview_status': 'Not Taken'
     }
-
+    
     try:
-        response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload)
+        response = session.post(OPENAI_API_URL, headers=headers, json=payload)
         response.raise_for_status()
-
-        model_response_content = response.json().get('choices', [{}])[0].get('message', {}).get('content', '')
-
-        json_search = re.search(r'\{.*?\}', model_response_content, re.DOTALL)
-
-        if json_search:
-            json_str = json_search.group(0)
-            try:
-                parsed_data = json.loads(json_str)
-
-                # Update candidate with parsed data, using .get for safety
-                candidate['name'] = parsed_data.get('name', 'Unknown')
-                candidate['position'] = parsed_data.get('position', 'Not specified')
-
-                # Handle qualifications, ensuring it's a list
-                qualifications_data = parsed_data.get('qualifications', [])
-                if isinstance(qualifications_data, list):
-                    candidate['qualifications'] = qualifications_data
-                elif isinstance(qualifications_data, str) and qualifications_data.strip():
-                    candidate['qualifications'] = [q.strip() for q in qualifications_data.split(',') if q.strip()]
-                else:
-                    candidate['qualifications'] = []
-
-
-                candidate['experience_years'] = parsed_data.get('experience_years', 0)
-                # Ensure skills is a list
-                skills_data = parsed_data.get('skills', [])
-                if isinstance(skills_data, list):
-                    candidate['skills'] = skills_data
-                elif isinstance(skills_data, str) and skills_data.strip():
-                    candidate['skills'] = [s.strip() for s in skills_data.split(',') if s.strip()]
-                else:
-                    candidate['skills'] = []
-
-
-                # Ensure previous_experience is a list
-                prev_exp_data = parsed_data.get('previous_experience', [])
-                if isinstance(prev_exp_data, list):
-                    candidate['previous_experience'] = prev_exp_data
-                elif isinstance(prev_exp_data, str) and prev_exp_data.strip():
-                    candidate['previous_experience'] = [p.strip() for p in prev_exp_data.split(',') if p.strip()]
-                else:
-                    candidate['previous_experience'] = []
-
-
-            except json.JSONDecodeError as e:
-                print(f"Error decoding JSON from model response: {e}. Raw content: {json_str[:200]}...")
-            except Exception as e:
-                print(f"Error processing parsed JSON data: {e}. Parsed data: {parsed_data}")
-        else:
-            print(f"No JSON object found in model response content: {model_response_content[:200]}...")
-
-    except (requests.RequestException, KeyError) as e:
-        print(f"Error communicating with OpenRouter API or unexpected response structure: {e}")
+        content = response.json()['choices'][0]['message']['content']
+        print(f"OpenAI parse_resume content: {content}")
+        parsed_data = json.loads(content)
+        
+        candidate['name'] = parsed_data.get('name', 'Unknown')
+        candidate['position'] = parsed_data.get('position', 'Not specified')
+        
+        qualifications_data = parsed_data.get('qualifications', [])
+        candidate['qualifications'] = qualifications_data if isinstance(qualifications_data, list) else [q.strip() for q in qualifications_data.split(',') if q.strip()] if isinstance(qualifications_data, str) else []
+        
+        candidate['experience_years'] = parsed_data.get('experience_years', 0)
+        
+        skills_data = parsed_data.get('skills', [])
+        candidate['skills'] = skills_data if isinstance(skills_data, list) else [s.strip() for s in skills_data.split(',') if s.strip()] if isinstance(skills_data, str) else []
+        
+        prev_exp_data = parsed_data.get('previous_experience', [])
+        candidate['previous_experience'] = prev_exp_data if isinstance(prev_exp_data, list) else [p.strip() for p in prev_exp_data.split(',') if p.strip()] if isinstance(prev_exp_data, str) else []
+        
+    except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
+        print(f"Error parsing resume: {e}")
     except Exception as e:
-        print(f"An unexpected error occurred in parse_resume: {e}")
-
+        print(f"Unexpected error in parse_resume: {e}")
+    
     return candidate
-# Match resume to open positions using OpenRouter API
+
+# Match resume to open positions using OpenAI API
 def match_position(candidate, positions):
     headers = {
-        'Authorization': f'Bearer {OPENROUTER_API_KEY}',
-        'Content-Type': 'application/json'
-    }
-
-    # Prepare position texts, handling cases where skills/qualifications might be lists
-    position_texts = []
-    for pos in positions:
-        # Ensure 'required_skills' and 'qualifications' are joined correctly if they are lists
-        required_skills_str = ', '.join(pos.get('required_skills', [])) if isinstance(pos.get('required_skills'), list) else pos.get('required_skills', '')
-        qualifications_str = ', '.join(pos.get('qualifications', [])) if isinstance(pos.get('qualifications'), list) else pos.get('qualifications', '')
-
-        position_texts.append(
-            f"Position: {pos.get('title', 'N/A')}, Required Skills: {required_skills_str}, Qualifications: {qualifications_str}, Min Experience: {pos.get('min_experience_years', 0)} years"
-        )
-
-    # Prepare candidate details, ensuring lists are joined correctly
-    candidate_skills_str = ', '.join(candidate.get('skills', [])) if isinstance(candidate.get('skills'), list) else candidate.get('skills', '')
-    candidate_qualifications_str = ', '.join(candidate.get('qualifications', [])) if isinstance(candidate.get('qualifications'), list) else candidate.get('qualifications', '')
-    candidate_experience_years = candidate.get('experience_years', 0)
-
-    prompt = f"""
-    Given the candidate's details and a list of open positions, determine the best matching position. If no position matches, return 'No matching position available'.
-
-    Candidate Details:
-    - Skills: {candidate_skills_str}
-    - Qualifications: {candidate_qualifications_str}
-    - Experience: {candidate_experience_years} years
-
-    Open Positions:
-    {', '.join(position_texts)}
-
-    Return the response in JSON format with a single field 'position'.
-    """
-
-    payload = {
-        'model': OPENROUTER_MODEL,
-        'messages': [{'role': 'user', 'content': prompt}],
-        'response_format': {'type': 'json_object'}
-    }
-
-    try:
-        response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload)
-        response.raise_for_status()
-
-        # Get the raw content from the model's response
-        # It's usually nested under choices[0].message.content
-        model_response_content = response.json().get('choices', [{}])[0].get('message', {}).get('content', '')
-
-        # Use re.search to find the JSON object anywhere in the string
-        json_search = re.search(r'\{.*?\}', model_response_content, re.DOTALL)
-
-        if json_search:
-            json_str = json_search.group(0)
-            try:
-                result = json.loads(json_str)
-                return result.get('position', 'No matching position available')
-            except json.JSONDecodeError as e:
-                print(f"Error decoding JSON from model response in match_position: {e}. Raw content: {json_str[:200]}...")
-                return 'No matching position available'
-        else:
-            print(f"No JSON object found in model response content for match_position: {model_response_content[:200]}...")
-            return 'No matching position available'
-
-    except (requests.RequestException, KeyError) as e:
-        print(f"Error communicating with OpenRouter API or unexpected response structure in match_position: {e}")
-        return 'No matching position available'
-    except Exception as e:
-        print(f"An unexpected error occurred in match_position: {e}")
-        return 'No matching position available'
-def match_position(candidate, positions):
-    headers = {
-        'Authorization': f'Bearer {OPENROUTER_API_KEY}',
+        'Authorization': f'Bearer {OPENAI_API_KEY}',
         'Content-Type': 'application/json'
     }
 
@@ -389,7 +269,6 @@ def match_position(candidate, positions):
     for pos in positions:
         required_skills_str = ', '.join(pos.get('required_skills', [])) if isinstance(pos.get('required_skills'), list) else pos.get('required_skills', '')
         qualifications_str = ', '.join(pos.get('qualifications', [])) if isinstance(pos.get('qualifications'), list) else pos.get('qualifications', '')
-
         position_texts.append(
             f"Position: {pos.get('title', 'N/A')}, Required Skills: {required_skills_str}, Qualifications: {qualifications_str}, Min Experience: {pos.get('min_experience_years', 0)} years"
         )
@@ -398,14 +277,16 @@ def match_position(candidate, positions):
     candidate_qualifications_str = ', '.join(candidate.get('qualifications', [])) if isinstance(candidate.get('qualifications'), list) else candidate.get('qualifications', '')
     candidate_experience_years = candidate.get('experience_years', 0)
 
-    # --- IMPORTANT: MODIFIED PROMPT BELOW ---
+    # --- MODIFIED PROMPT BELOW ---
     prompt = f"""
-    Given the candidate's details and a list of open positions, determine the best matching position.
-    Return the response strictly in JSON format with a single field "position".
-    The value for "position" MUST be a string enclosed in double quotes.
+    Given the candidate's details and a list of open positions, determine the **best overall matching position**.
 
-    Example if a match is found: {{"position": "Software Engineer"}}
-    Example if no match: {{"position": "No matching position available"}}
+    Be flexible and consider **relatedness** in skills and qualifications, not just exact matches.
+    Prioritize candidates who meet or are close to the minimum experience, but consider strong skill/qualification overlaps even if experience is slightly less.
+    If a candidate has a broad set of technical skills, they might be a good fit for a software engineering or data role even if specific required skills aren't listed verbatim.
+    Similarly, consider qualifications that are generally relevant to the field (e.g., any Bachelor's degree in a technical field for a tech role).
+
+    If a reasonable match exists, return that position. Only return 'No matching position available' if there's truly no significant overlap or potential fit.
 
     Candidate Details:
     - Skills: {candidate_skills_str}
@@ -414,47 +295,41 @@ def match_position(candidate, positions):
 
     Open Positions:
     {'; '.join(position_texts)}
+
+    Return the response strictly as a JSON object with a single key "position".
+    Both the key "position" and its string value MUST be enclosed in double quotes.
+
+    Example for a match: {{"position": "Software Engineer"}}
+    Example for no match: {{"position": "No matching position available"}}
     """
     # --- END MODIFIED PROMPT ---
 
     payload = {
-        'model': OPENROUTER_MODEL,
+        'model': OPENAI_MODEL,
         'messages': [{'role': 'user', 'content': prompt}],
-        'response_format': {'type': 'json_object'}
+        'response_format': {'type': 'json_object'},
+        'max_tokens': 200
     }
 
     try:
-        response = requests.post(OPENROUTER_API_URL, headers=headers, json=payload)
+        # Use your session.post here if 'session' is defined, otherwise use requests.post
+        # Assuming 'session' is an existing requests.Session object for persistent connections
+        response = session.post(OPENAI_API_URL, headers=headers, json=payload)
         response.raise_for_status()
-
-        model_response_content = response.json().get('choices', [{}])[0].get('message', {}).get('content', '')
-
-        json_search = re.search(r'\{.*?\}', model_response_content, re.DOTALL)
-
-        if json_search:
-            json_str = json_search.group(0)
-            try:
-                result = json.loads(json_str)
-                # Ensure the returned position is a string, even if the model messes up the type
-                position_value = result.get('position', 'No matching position available')
-                if not isinstance(position_value, str):
-                    print(f"Warning: 'position' value is not a string, defaulting. Value: {position_value}")
-                    return 'No matching position available'
-                return position_value
-            except json.JSONDecodeError as e:
-                print(f"Error decoding JSON from model response in match_position: {e}. Raw content: {json_str[:200]}...")
-                return 'No matching position available'
-        else:
-            print(f"No JSON object found in model response content for match_position: {model_response_content[:200]}...")
+        content = response.json()['choices'][0]['message']['content']
+        print(f"OpenAI match_position content: {content}")
+        result = json.loads(content)
+        position_value = result.get('position', 'No matching position available')
+        if not isinstance(position_value, str):
+            print(f"Warning: 'position' value is not a string: {position_value}")
             return 'No matching position available'
-
-    except (requests.RequestException, KeyError) as e:
-        print(f"Error communicating with OpenRouter API or unexpected response structure in match_position: {e}")
+        return position_value
+    except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
+        print(f"Error matching position: {e}")
         return 'No matching position available'
     except Exception as e:
-        print(f"An unexpected error occurred in match_position: {e}")
+        print(f"Unexpected error in match_position: {e}")
         return 'No matching position available'
-
 
 # Fetch and process emails using Microsoft Graph
 def process_emails():
@@ -477,22 +352,47 @@ def process_emails():
         headers = {'Authorization': f'Bearer {access_token}'}
         
         # Get unread emails with attachments
-        response = requests.get(
-            'https://graph.microsoft.com/v1.0/me/mailFolders/Inbox/messages?$filter=isRead eq false and hasAttachments eq true',
-            headers=headers
-        )
-        response.raise_for_status()
-        messages = response.json().get('value', [])
-        print(f"Found {len(messages)} unread emails with attachments.")
+        for attempt in range(3):
+            try:
+                response = session.get(
+                    'https://graph.microsoft.com/v1.0/me/mailFolders/Inbox/messages?$filter=isRead eq false and hasAttachments eq true',
+                    headers=headers,
+                    timeout=10
+                )
+                response.raise_for_status()
+                messages = response.json().get('value', [])
+                print(f"Found {len(messages)} unread emails with attachments.")
+                break
+            except requests.RequestException as e:
+                print(f"Graph API request failed (attempt {attempt + 1}): {str(e)}")
+                if attempt < 2:
+                    time.sleep(2)
+                else:
+                    raise
+        else:
+            raise Exception("Failed to fetch emails after retries")
         
         for message in messages:
             # Get attachments
-            attachments_response = requests.get(
-                f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments',
-                headers=headers
-            )
-            attachments_response.raise_for_status()
-            attachments = attachments_response.json().get('value', [])
+            for attempt in range(3):
+                try:
+                    attachments_response = session.get(
+                        f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments',
+                        headers=headers,
+                        timeout=10
+                    )
+                    attachments_response.raise_for_status()
+                    attachments = attachments_response.json().get('value', [])
+                    break
+                except requests.RequestException as e:
+                    print(f"Graph API attachments request failed (attempt {attempt + 1}): {str(e)}")
+                    if attempt < 2:
+                        time.sleep(2)
+                    else:
+                        raise
+            else:
+                print(f"Skipping message {message['id']} due to repeated failures")
+                continue
             
             for attachment in attachments:
                 if attachment['contentType'] != 'application/pdf':
@@ -505,25 +405,44 @@ def process_emails():
                 if 'resume' in attachment['name'].lower():
                     print(f"Processing resume attachment: {attachment['name']}")
                     # Download attachment
-                    content_bytes = requests.get(
-                        f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments/{attachment["id"]}/$value',
-                        headers=headers
-                    ).content
-                    with open(attachment_path, 'wb') as f:
-                        f.write(content_bytes)
+                    for attempt in range(3):
+                        try:
+                            content_bytes = session.get(
+                                f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments/{attachment["id"]}/$value',
+                                headers=headers,
+                                timeout=10
+                            ).content
+                            with open(attachment_path, 'wb') as f:
+                                f.write(content_bytes)
+                            break
+                        except requests.RequestException as e:
+                            print(f"Graph API attachment download failed (attempt {attempt + 1}): {str(e)}")
+                            if attempt < 2:
+                                time.sleep(2)
+                            else:
+                                raise
                 else:
                     print(f"Checking if attachment is a resume: {attachment['name']}")
                     # Download temporarily to check content
-                    content_bytes = requests.get(
-                        f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments/{attachment["id"]}/$value',
-                        headers=headers
-                    ).content
-                    with open(attachment_path, 'wb') as f:
-                        f.write(content_bytes)
+                    for attempt in range(3):
+                        try:
+                            content_bytes = session.get(
+                                f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments/{attachment["id"]}/$value',
+                                headers=headers,
+                                timeout=10
+                            ).content
+                            with open(attachment_path, 'wb') as f:
+                                f.write(content_bytes)
+                            break
+                        except requests.RequestException as e:
+                            print(f"Graph API attachment download failed (attempt {attempt + 1}): {str(e)}")
+                            if attempt < 2:
+                                time.sleep(2)
+                            else:
+                                raise
                     
                     # Extract first 25 lines and check if it's a resume
                     first_25_lines = extract_first_25_lines(attachment_path)
-                    # print(f"First 25 lines extracted for resume check: {first_25_lines}")
                     if not is_resume(first_25_lines):
                         print(f"Attachment not a resume, skipping: {attachment['name']}")
                         os.remove(attachment_path)  # Clean up temporary file
@@ -556,11 +475,21 @@ def process_emails():
                 db.commit()
                 
                 # Mark email as read
-                requests.patch(
-                    f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}',
-                    headers=headers,
-                    json={'isRead': True}
-                )
+                for attempt in range(3):
+                    try:
+                        session.patch(
+                            f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}',
+                            headers=headers,
+                            json={'isRead': True},
+                            timeout=10
+                        )
+                        break
+                    except requests.RequestException as e:
+                        print(f"Graph API mark read failed (attempt {attempt + 1}): {str(e)}")
+                        if attempt < 2:
+                            time.sleep(2)
+                        else:
+                            raise
         
         cursor.close()
         db.close()
@@ -569,10 +498,13 @@ def process_emails():
         print(f"Database error in process_emails: {err}")
         return False
     except requests.HTTPError as e:
-        print(f"Graph API error in process_emails: {e.response.text}")
+        print(f"Graph API HTTP error in process_emails: {e.response.text}")
+        return False
+    except requests.RequestException as e:
+        print(f"Network error in process_emails: {str(e)}")
         return False
     except Exception as e:
-        print(f"Error in process_emails: {str(e)}")
+        print(f"Unexpected error in process_emails: {str(e)}")
         return False
 
 @app.route('/')
