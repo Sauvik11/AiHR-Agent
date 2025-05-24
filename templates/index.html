@@ -1,8 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>HR Agent Dashboard</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
@@ -72,9 +72,20 @@
                 width: 100%;
             }
         }
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+    />
+    <style>
+      body {
+        padding: 20px;
+      }
+      .filter-section {
+        margin-bottom: 20px;
+      }
     </style>
-</head>
-<body>
+  </head>
+  <body>
     <div class="container">
          <div class="container">
         <div class="header-container">
@@ -136,8 +147,208 @@
                         <iframe id="resumeFrame" src="" width="100%" height="600px" style="border: none;"></iframe>
                     </div>
                 </div>
+
+      <h1 class="mb-4">HR Agent Dashboard</h1>
+      <button class="btn btn-primary mb-3" onclick="processEmails()">
+        Process Emails
+      </button>
+
+      <div class="filter-section">
+        <form id="filterForm">
+          <div class="row">
+            <div class="col-md-3">
+              <label for="position" class="form-label">Position</label>
+              <input
+                type="text"
+                class="form-control"
+                id="position"
+                placeholder="e.g., Software Engineer"
+              />
             </div>
+            <div class="col-md-3">
+              <label for="education" class="form-label">Education</label>
+              <input
+                type="text"
+                class="form-control"
+                id="education"
+                placeholder="e.g., Bachelor"
+              />
+            </div>
+            <div class="col-md-3">
+              <label for="education" class="form-label">Education</label>
+              <input
+                type="text"
+                class="form-control"
+                id="education"
+                placeholder="e.g., Bachelor"
+              />
+            </div>
+            <div class="col-md-3">
+              <label for="experience" class="form-label"
+                >Min Experience (Years)</label
+              >
+              <input
+                type="number"
+                class="form-control"
+                id="experience"
+                placeholder="e.g., 2"
+              />
+            </div>
+            <div class="col-md-3 align-self-end">
+              <button type="submit" class="btn btn-success">
+                Apply Filters
+              </button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <table class="table table-striped">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Position</th>
+            <th>Qualifications</th>
+            <th>Experience (Years)</th>
+            <th>Skills</th>
+            <th>Previous Experience</th>
+            <th>Interview Status</th>
+            <th>Application Date</th>
+            <th>Resume</th>
+            <!-- 👈 New column -->
+          </tr>
+        </thead>
+        <tbody id="candidateTable"></tbody>
+      </table>
+      <div
+        class="modal fade"
+        id="resumeModal"
+        tabindex="-1"
+        aria-labelledby="resumeModalLabel"
+        aria-hidden="true"
+      >
+        <div class="modal-dialog modal-xl" style="max-width: 90%">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title" id="resumeModalLabel">Resume Viewer</h5>
+              <button
+                type="button"
+                class="btn-close"
+                data-bs-dismiss="modal"
+                aria-label="Close"
+              ></button>
+            </div>
+            <div class="modal-body">
+              <iframe
+                id="resumeFrame"
+                src=""
+                width="100%"
+                height="600px"
+                style="border: none"
+              ></iframe>
+              <button class="btn btn-primary" onclick="startChatbot()">
+                Start Chatbot
+              </button>
+              <!-- 💬 Discuss with AI
+              </button> -->
+            </div>
+          </div>
+
+          <!-- Chatbot Modal -->
+          <div
+            class="modal fade"
+            id="chatModal"
+            tabindex="-1"
+            aria-labelledby="chatModalLabel"
+            aria-hidden="true"
+          >
+            <div class="modal-dialog modal-lg">
+              <div class="modal-content">
+                <div class="modal-header">
+                  <h5 class="modal-title" id="chatModalLabel">
+                    AI Interview Assistant
+                  </h5>
+                  <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="modal"
+                    aria-label="Close"
+                  ></button>
+                </div>
+                <div class="modal-body">
+                  <div
+                    id="chatbox"
+                    style="
+                      height: 300px;
+                      overflow-y: auto;
+                      border: 1px solid #ccc;
+                      padding: 10px;
+                      margin-bottom: 10px;
+                    "
+                  ></div>
+                  <input
+                    type="text"
+                    id="chatInput"
+                    class="form-control"
+                    placeholder="Ask something..."
+                    onkeydown="if(event.key==='Enter') sendChat()"
+                  />
+                </div>
+              </div>
+
+            </div>
+          </div>
         </div>
+        <div
+          class="modal fade"
+          id="chatbotModal"
+          tabindex="-1"
+          aria-labelledby="chatbotModalLabel"
+          aria-hidden="true"
+        >
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header">
+                <h5 class="modal-title" id="chatbotModalLabel">
+                  AI Interview Assistant
+                </h5>
+                <button
+                  type="button"
+                  class="btn-close"
+                  data-bs-dismiss="modal"
+                  aria-label="Close"
+                ></button>
+              </div>
+              <div class="modal-body">
+                <div
+                  id="chatContainer"
+                  style="
+                    max-height: 400px;
+                    overflow-y: auto;
+                    border: 1px solid #ddd;
+                    padding: 10px;
+                    margin-bottom: 10px;
+                  "
+                >
+                
+                </div>
+                <div class="input-group">
+                  <input
+                    type="text"
+                    id="chatbotInput"
+                    class="form-control"
+                    placeholder="Ask something like: What should I ask this candidate?"
+                    onkeydown="if(event.key==='Enter') sendMessage()"
+                  />
+                  <button class="btn btn-primary" onclick="sendMessage()">
+                    Send
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
@@ -220,4 +431,142 @@
         fetchCandidates();
     </script>
 </body>
+</html>
+    <script>
+      let selectedResumePath = "";
+
+      function fetchCandidates() {
+        const position = document.getElementById("position").value;
+        const education = document.getElementById("education").value;
+        const experience = document.getElementById("experience").value;
+
+        fetch(
+          `/api/candidates?position=${encodeURIComponent(
+            position
+          )}&education=${encodeURIComponent(
+            education
+          )}&experience=${encodeURIComponent(experience)}`
+        )
+          .then((res) => {
+            if (!res.ok) throw new Error("Failed to fetch candidates");
+            return res.json();
+          })
+          .then((data) => {
+            const tableBody = document.getElementById("candidateTable");
+            tableBody.innerHTML = "";
+            data.forEach((candidate) => {
+              const row = document.createElement("tr");
+              row.innerHTML = `
+          <td>${candidate.name}</td>
+          <td>${candidate.position}</td>
+          <td>${candidate.qualifications}</td>
+          <td>${candidate.experience_years}</td>
+          <td>${candidate.skills}</td>
+          <td>${candidate.previous_experience}</td>
+          <td>${candidate.interview_status}</td>
+          <td>${new Date(candidate.application_date).toLocaleDateString()}</td>
+          <td>
+            <button class="btn btn-outline-info btn-sm" onclick="viewResume('${
+              candidate.resume_path
+            }')">View</button>
+          </td>`;
+              tableBody.appendChild(row);
+            });
+          })
+          .catch((error) => {
+            console.error("Error fetching candidates:", error);
+            alert("Failed to load candidates: " + error.message);
+          });
+      }
+
+      function viewResume(resumePath) {
+        selectedResumePath = resumePath; // track which resume is active
+        document.getElementById("resumeFrame").src = resumePath;
+        const modal = new bootstrap.Modal(
+          document.getElementById("resumeModal")
+        );
+        modal.show();
+      }
+
+      function startChatbot() {
+        if (!selectedResumePath) {
+          alert("Open a resume first!");
+          return;
+        }
+        // Clear chat container input and messages
+        document.getElementById("chatContainer").innerHTML = "";
+        document.getElementById("chatInput").value = "";
+        const chatbotModal = new bootstrap.Modal(
+          document.getElementById("chatbotModal")
+        );
+        chatbotModal.show();
+      }
+
+      function sendMessage() {
+        const input = document.getElementById("chatbotInput");
+        const msg = input.value.trim();
+        console.log(msg,"mymessage");
+        if (!msg) return;
+
+        const chatContainer = document.getElementById("chatContainer");
+        chatContainer.innerHTML += `<p><strong>You:</strong> ${msg}</p>`;
+        input.value = "";
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+
+        fetch("/api/ask_ai", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: msg,
+            resume_path: selectedResumePath,
+          }),
+        })
+          .then((res) => res.json())
+          .then((data) => {
+            chatContainer.innerHTML += `<p><strong>AI:</strong> ${data.response}</p>`;
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+          })
+          .catch((err) => {
+            chatContainer.innerHTML += `<p><strong>AI:</strong> Sorry, something went wrong.</p>`;
+            console.error(err);
+          });
+      }
+
+      function processEmails() {
+        fetch("/api/process_emails", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+        })
+          .then((response) => {
+            if (response.redirected) {
+              console.log("Redirecting to OAuth URL:", response.url);
+              window.location.href = response.url;
+              return null;
+            }
+            if (!response.ok) throw new Error("Failed to process emails");
+            return response.json();
+          })
+          .then((data) => {
+            if (data) {
+              alert(
+                data.status || data.error || "Emails processed successfully"
+              );
+              fetchCandidates();
+            }
+          })
+          .catch((error) => {
+            console.error("Error processing emails:", error);
+            alert("Failed to process emails: " + error.message);
+          });
+      }
+
+      document.getElementById("filterForm").addEventListener("submit", (e) => {
+        e.preventDefault();
+        fetchCandidates();
+      });
+
+      // Load data on page load
+      fetchCandidates();
+    </script>
+  </body>
 </html>
