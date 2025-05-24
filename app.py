@@ -5,6 +5,7 @@ import PyPDF2
 import requests
 import json
 from datetime import datetime
+import time
 from dotenv import load_dotenv
 import os
 from auth import get_auth_url, get_token
@@ -203,15 +204,15 @@ def parse_resume(text):
     }
     
     prompt = f"""
-    Extract the following details from the resume text below:
-    - Candidate name
-    - Position applied for (if mentioned, else return 'Not specified')
-    - Qualifications (list of degrees/certifications, e.g., ["Bachelor of Science", "Master of Arts", "PMP Certificate"])
-    - Years of experience (numeric value, estimate if not explicit)
-    - Skills (list of technical or relevant skills, e.g., ["Python", "AWS", "SQL"])
-    - Previous experience (list of companies or roles, max 2 entries, e.g., ["Software Engineer at Google", "Data Scientist at Amazon"])
+    Extract the following details from the resume text below and return them in JSON format with the exact key names specified:
+    - name: The candidate's full name (string)
+    - position: The position applied for (string, use 'Not specified' if not mentioned)
+    - qualifications: List of degrees or certifications (list of strings, e.g., ["Bachelor of Science", "PMP Certificate"])
+    - experience_years: Estimated years of professional experience (integer, estimate if not explicit, use 0 if none)
+    - skills: List of technical or relevant skills (list of strings, e.g., ["Python", "AWS"])
+    - previous_experience: List of up to 2 previous companies or roles (list of strings, e.g., ["Software Engineer at Google"])
 
-    Return the response in JSON format. If a field cannot be determined, use appropriate defaults (e.g., empty list for lists, 0 for numbers, 'Not specified' for strings).
+    Use these exact key names in the JSON response (e.g., 'name', not 'Candidate name'). If a field cannot be determined, use appropriate defaults (e.g., empty list for lists, 0 for numbers, 'Not specified' for strings).
 
     Resume text:
     {text}
@@ -235,25 +236,50 @@ def parse_resume(text):
     }
     
     try:
-        response = session.post(OPENAI_API_URL, headers=headers, json=payload)
+        response = session.post(OPENAI_API_URL, headers=headers, json=payload, timeout=10)
         response.raise_for_status()
         content = response.json()['choices'][0]['message']['content']
         print(f"OpenAI parse_resume content: {content}")
         parsed_data = json.loads(content)
+        print(f"Parsed data: {json.dumps(parsed_data, indent=2)}")
         
-        candidate['name'] = parsed_data.get('name', 'Unknown')
-        candidate['position'] = parsed_data.get('position', 'Not specified')
+        # Key mapping for common variations
+        key_mappings = {
+            'name': ['name', 'Candidate name', 'candidate_name', 'Name'],
+            'position': ['position', 'Position applied for', 'position_applied_for'],
+            'qualifications': ['qualifications', 'Qualifications'],
+            'experience_years': ['experience_years', 'Years of experience', 'years_of_experience'],
+            'skills': ['skills', 'Skills'],
+            'previous_experience': ['previous_experience', 'Previous experience', 'previous_experiences']
+        }
         
-        qualifications_data = parsed_data.get('qualifications', [])
-        candidate['qualifications'] = qualifications_data if isinstance(qualifications_data, list) else [q.strip() for q in qualifications_data.split(',') if q.strip()] if isinstance(qualifications_data, str) else []
+        # Update candidate with mapped keys
+        for candidate_key, possible_keys in key_mappings.items():
+            for key in possible_keys:
+                if key in parsed_data:
+                    candidate[candidate_key] = parsed_data[key]
+                    break
+            # Fallback to get() if no mapped key is found
+            if candidate[candidate_key] == candidate.get(candidate_key, None):  # Check if unchanged
+                candidate[candidate_key] = parsed_data.get(candidate_key, candidate[candidate_key])
         
-        candidate['experience_years'] = parsed_data.get('experience_years', 0)
-        
-        skills_data = parsed_data.get('skills', [])
-        candidate['skills'] = skills_data if isinstance(skills_data, list) else [s.strip() for s in skills_data.split(',') if s.strip()] if isinstance(skills_data, str) else []
-        
-        prev_exp_data = parsed_data.get('previous_experience', [])
-        candidate['previous_experience'] = prev_exp_data if isinstance(prev_exp_data, list) else [p.strip() for p in prev_exp_data.split(',') if p.strip()] if isinstance(prev_exp_data, str) else []
+        # Ensure correct types
+        candidate['qualifications'] = (
+            candidate['qualifications'] if isinstance(candidate['qualifications'], list)
+            else [q.strip() for q in candidate['qualifications'].split(',') if q.strip()]
+            if isinstance(candidate['qualifications'], str) else []
+        )
+        candidate['skills'] = (
+            candidate['skills'] if isinstance(candidate['skills'], list)
+            else [s.strip() for s in candidate['skills'].split(',') if s.strip()]
+            if isinstance(candidate['skills'], str) else []
+        )
+        candidate['previous_experience'] = (
+            candidate['previous_experience'] if isinstance(candidate['previous_experience'], list)
+            else [p.strip() for p in candidate['previous_experience'].split(',') if p.strip()]
+            if isinstance(candidate['previous_experience'], str) else []
+        )
+        candidate['experience_years'] = int(candidate['experience_years']) if isinstance(candidate['experience_years'], (int, float, str)) else 0
         
     except (requests.RequestException, json.JSONDecodeError, KeyError) as e:
         print(f"Error parsing resume: {e}")
@@ -261,6 +287,7 @@ def parse_resume(text):
         print(f"Unexpected error in parse_resume: {e}")
     
     return candidate
+
 
 # Match resume to open positions using OpenAI API
 def match_position(candidate, positions):
@@ -377,11 +404,18 @@ def process_emails():
             raise Exception("Failed to fetch emails after retries")
         
         for message in messages:
+            message_id = message['id']
+            # Check if message has already been processed
+            cursor.execute("SELECT message_id FROM processed_emails WHERE message_id = %s", (message_id,))
+            if cursor.fetchone():
+                print(f"Skipping already processed email: {message_id}")
+                continue
+            
             # Get attachments
             for attempt in range(3):
                 try:
                     attachments_response = session.get(
-                        f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments',
+                        f'https://graph.microsoft.com/v1.0/me/messages/{message_id}/attachments',
                         headers=headers,
                         timeout=10
                     )
@@ -389,30 +423,33 @@ def process_emails():
                     attachments = attachments_response.json().get('value', [])
                     break
                 except requests.RequestException as e:
-                    print(f"Graph API attachments request failed (attempt {attempt + 1}): {str(e)}")
+                    print(f"Graph API attachments request failed for message {message_id} (attempt {attempt + 1}): {str(e)}")
                     if attempt < 2:
                         time.sleep(2)
                     else:
                         raise
             else:
-                print(f"Skipping message {message['id']} due to repeated failures")
+                print(f"Skipping message {message_id} due to repeated failures")
                 continue
+            
+            # Flag to track if any resumes were processed
+            resume_processed = False
             
             for attachment in attachments:
                 if attachment['contentType'] != 'application/pdf':
-                    print(f"Skipping non-PDF attachment: {attachment['name']}")
+                    print(f"Skipping non-PDF attachment: {attachment['name']} in message {message_id}")
                     continue
                 
                 attachment_path = f'resumes/{attachment["name"]}'
                 
                 # Check if filename contains 'resume'
                 if 'resume' in attachment['name'].lower():
-                    print(f"Processing resume attachment: {attachment['name']}")
+                    print(f"Processing resume attachment: {attachment['name']} in message {message_id}")
                     # Download attachment
                     for attempt in range(3):
                         try:
                             content_bytes = session.get(
-                                f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments/{attachment["id"]}/$value',
+                                f'https://graph.microsoft.com/v1.0/me/messages/{message_id}/attachments/{attachment["id"]}/$value',
                                 headers=headers,
                                 timeout=10
                             ).content
@@ -420,18 +457,18 @@ def process_emails():
                                 f.write(content_bytes)
                             break
                         except requests.RequestException as e:
-                            print(f"Graph API attachment download failed (attempt {attempt + 1}): {str(e)}")
+                            print(f"Graph API attachment download failed for {attachment['name']} (attempt {attempt + 1}): {str(e)}")
                             if attempt < 2:
                                 time.sleep(2)
                             else:
                                 raise
                 else:
-                    print(f"Checking if attachment is a resume: {attachment['name']}")
+                    print(f"Checking if attachment is a resume: {attachment['name']} in message {message_id}")
                     # Download temporarily to check content
                     for attempt in range(3):
                         try:
                             content_bytes = session.get(
-                                f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}/attachments/{attachment["id"]}/$value',
+                                f'https://graph.microsoft.com/v1.0/me/messages/{message_id}/attachments/{attachment["id"]}/$value',
                                 headers=headers,
                                 timeout=10
                             ).content
@@ -439,7 +476,7 @@ def process_emails():
                                 f.write(content_bytes)
                             break
                         except requests.RequestException as e:
-                            print(f"Graph API attachment download failed (attempt {attempt + 1}): {str(e)}")
+                            print(f"Graph API attachment download failed for {attachment['name']} (attempt {attempt + 1}): {str(e)}")
                             if attempt < 2:
                                 time.sleep(2)
                             else:
@@ -448,10 +485,10 @@ def process_emails():
                     # Extract first 25 lines and check if it's a resume
                     first_25_lines = extract_first_25_lines(attachment_path)
                     if not is_resume(first_25_lines):
-                        print(f"Attachment not a resume, skipping: {attachment['name']}")
+                        print(f"Attachment not a resume, skipping: {attachment['name']} in message {message_id}")
                         os.remove(attachment_path)  # Clean up temporary file
                         continue
-                    print(f"Confirmed resume attachment: {attachment['name']}")
+                    print(f"Confirmed resume attachment: {attachment['name']} in message {message_id}")
                 
                 # Parse resume
                 text = extract_resume_text(attachment_path)
@@ -459,6 +496,7 @@ def process_emails():
                 
                 # Match to open position
                 candidate['position'] = match_position(candidate, positions)
+                print(f"Matched position for candidate: {candidate}")
                 
                 # Insert into database
                 query = """
@@ -476,28 +514,50 @@ def process_emails():
                     datetime.now()
                 )
                 cursor.execute(query, values)
-                db.commit()
-                
+                resume_processed = True
+            
+            # If at least one resume was processed, mark email as read and record message_id
+            if resume_processed:
                 # Mark email as read
                 for attempt in range(3):
                     try:
                         session.patch(
-                            f'https://graph.microsoft.com/v1.0/me/messages/{message["id"]}',
+                            f'https://graph.microsoft.com/v1.0/me/messages/{message_id}',
                             headers=headers,
                             json={'isRead': True},
                             timeout=10
                         )
                         break
                     except requests.RequestException as e:
-                        print(f"Graph API mark read failed (attempt {attempt + 1}): {str(e)}")
+                        print(f"Graph API mark read failed for message {message_id} (attempt {attempt + 1}): {str(e)}")
                         if attempt < 2:
                             time.sleep(2)
                         else:
                             raise
+                
+                # Record message_id in processed_emails
+                cursor.execute(
+                    "INSERT INTO processed_emails (message_id, processed_at) VALUES (%s, %s)",
+                    (message_id, datetime.now())
+                )
+                db.commit()
+                print(f"Recorded processed email: {message_id}")
         
         cursor.close()
         db.close()
         return True
+    except mysql.connector.Error as err:
+        print(f"Database error in process_emails: {err}")
+        return False
+    except requests.HTTPError as e:
+        print(f"Graph API HTTP error in process_emails: {e.response.text}")
+        return False
+    except requests.RequestException as e:
+        print(f"Network error in process_emails: {str(e)}")
+        return False
+    except Exception as e:
+        print(f"Unexpected error in process_emails: {str(e)}")
+        return False
     except mysql.connector.Error as err:
         print(f"Database error in process_emails: {err}")
         return False
