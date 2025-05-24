@@ -1,4 +1,6 @@
+
 Flask==3.0.3
+lask==3.0.3
 mysql-connector-python==8.4.0
 pdfplumber==0.11.4
 exchangelib==5.4.2
