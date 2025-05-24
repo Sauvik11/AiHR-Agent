@@ -124,7 +124,7 @@ def ask_openai(resume_text, user_message):
     system_prompt = (
         "You are an AI HR assistant. Use the following resume text to answer questions "
         "about the candidate's suitability, skills, and fit. Only use provided data. If info is missing, say 'not specified'.\n\n"
-        f"Resume Context:\n{resume_text[:3000]}"
+        f"Resume Context:\n{resume_text[:10000]}"
     )
 
     messages = [
@@ -143,7 +143,17 @@ def ask_openai(resume_text, user_message):
         try:
             res = requests.post(OPENAI_API_URL, headers=headers, json=payload)
             if res.status_code == 200:
-                return res.json()["choices"][0]["message"]["content"]
+                response_text = res.json()["choices"][0]["message"]["content"].strip()
+                # Format as bullet points if response is long (>150 chars)
+                if len(response_text) > 150:
+                    # Simple sentence splitting (period followed by space or end)
+                    sentences = [s.strip() for s in response_text.split('. ') if s.strip()]
+                    # Ensure each sentence ends with a period
+                    sentences = [s + ('.' if not s.endswith('.') else '') for s in sentences]
+                    # Wrap in HTML unordered list
+                    bullet_list = "<ul>" + "".join(f"<li>{s}</li>" for s in sentences) + "</ul>"
+                    return bullet_list
+                return response_text
             elif res.status_code == 429:
                 time.sleep(5)
             else:

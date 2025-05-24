@@ -66,6 +66,45 @@
             padding: 10px;
             margin-bottom: 10px;
         }
+        #chatContainer ul {
+            padding-left: 20px;
+            margin-bottom: 0;
+        }
+        #chatContainer li {
+            margin-bottom: 5px;
+        }
+        .suggested-questions {
+            margin-bottom: 15px;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .suggested-question-btn {
+            font-size: 0.9rem;
+            padding: 5px 10px;
+        }
+        .spinner-border-sm {
+            width: 1rem;
+            height: 1rem;
+            vertical-align: middle;
+        }
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 9999;
+            display: none;
+            justify-content: center;
+            align-items: center;
+        }
+        .loading-overlay .spinner-border {
+            width: 3rem;
+            height: 3rem;
+            color: #ffffff;
+        }
         @media (max-width: 768px) {
             .filter-form .col-md-3 {
                 margin-bottom: 10px;
@@ -78,6 +117,13 @@
                 margin: 10px 0;
                 width: 100%;
             }
+            .suggested-questions {
+                flex-direction: column;
+                gap: 8px;
+            }
+            .suggested-question-btn {
+                width: 100%;
+            }
         }
     </style>
 </head>
@@ -87,8 +133,10 @@
             <div class="header-card">
                 <h1 class="mb-3">HR Agent Dashboard</h1>
             </div>
-            <button class="btn btn-primary btn-sm process-emails-btn" onclick="processEmails()">
-                <i class="bi bi-arrow-repeat"></i> Process Emails
+            <button class="btn btn-primary btn-sm process-emails-btn" onclick="processEmails()" id="processEmailsBtn">
+                <span class="spinner-border spinner-border-sm d-none" role="status" aria-hidden="true" id="processSpinner"></span>
+                <i class="bi bi-arrow-repeat" id="processIcon"></i>
+                <span id="processText">Process Emails</span>
             </button>
         </div>
 
@@ -154,6 +202,13 @@
                         <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
                     <div class="modal-body">
+                        <div class="suggested-questions" id="suggestedQuestions">
+                            <button class="btn btn-outline-secondary btn-sm suggested-question-btn" onclick="sendSuggestedQuestion('What is the candidate’s education?')">What is the candidate’s education?</button>
+                            <button class="btn btn-outline-secondary btn-sm suggested-question-btn" onclick="sendSuggestedQuestion('What are the candidate’s key skills?')">What are the candidate’s key skills?</button>
+                            <button class="btn btn-outline-secondary btn-sm suggested-question-btn" onclick="sendSuggestedQuestion('What questions should I ask this candidate?')">What questions should I ask this candidate?</button>
+                            <button class="btn btn-outline-secondary btn-sm suggested-question-btn" onclick="sendSuggestedQuestion('How does the candidate’s experience align with the role?')">How does the candidate’s experience align with the role?</button>
+                            <button class="btn btn-outline-secondary btn-sm suggested-question-btn" onclick="sendSuggestedQuestion('What is the candidate’s most recent job role?')">What is the candidate’s most recent job role?</button>
+                        </div>
                         <div id="chatContainer"></div>
                         <div class="input-group">
                             <input type="text" id="chatbotInput" class="form-control" placeholder="Ask something like: What should I ask this candidate?" onkeydown="if(event.key==='Enter') sendMessage()">
@@ -161,6 +216,12 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <div class="loading-overlay" id="loadingOverlay">
+            <div class="spinner-border" role="status">
+                <span class="visually-hidden">Loading...</span>
             </div>
         </div>
     </div>
@@ -230,7 +291,9 @@
             if (!msg) return;
 
             const chatContainer = document.getElementById("chatContainer");
-            chatContainer.innerHTML += `<p><strong>You:</strong> ${msg}</p>`;
+            const userP = document.createElement('p');
+            userP.innerHTML = `<strong>You:</strong> ${msg}`;
+            chatContainer.appendChild(userP);
             input.value = "";
             chatContainer.scrollTop = chatContainer.scrollHeight;
 
@@ -244,17 +307,39 @@
             })
                 .then(res => res.json())
                 .then(data => {
-                    chatContainer.innerHTML += `<p><strong>AI:</strong> ${data.response}</p>`;
+                    const aiP = document.createElement('p');
+                    aiP.innerHTML = `<strong>AI:</strong> ${data.response}`;
+                    chatContainer.appendChild(aiP);
                     chatContainer.scrollTop = chatContainer.scrollHeight;
                 })
                 .catch(err => {
-                    chatContainer.innerHTML += `<p><strong>AI:</strong> Sorry, something went wrong.</p>`;
+                    const errorP = document.createElement('p');
+                    errorP.innerHTML = `<strong>AI:</strong> Sorry, something went wrong.`;
+                    chatContainer.appendChild(errorP);
                     chatContainer.scrollTop = chatContainer.scrollHeight;
                     console.error(err);
                 });
         }
 
+        function sendSuggestedQuestion(question) {
+            const input = document.getElementById("chatbotInput");
+            input.value = question;
+            sendMessage();
+        }
+
         function processEmails() {
+            const btn = document.getElementById('processEmailsBtn');
+            const spinner = document.getElementById('processSpinner');
+            const icon = document.getElementById('processIcon');
+            const text = document.getElementById('processText');
+            const overlay = document.getElementById('loadingOverlay');
+
+            overlay.style.display = 'flex';
+            spinner.classList.remove('d-none');
+            icon.classList.add('d-none');
+            text.classList.add('d-none');
+            btn.disabled = true;
+
             fetch('/api/process_emails', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }
@@ -277,6 +362,13 @@
                 .catch(error => {
                     console.error('Error processing emails:', error);
                     alert('Failed to process emails: ' + error.message);
+                })
+                .finally(() => {
+                    overlay.style.display = 'none';
+                    spinner.classList.add('d-none');
+                    icon.classList.remove('d-none');
+                    text.classList.remove('d-none');
+                    btn.disabled = false;
                 });
         }
 
