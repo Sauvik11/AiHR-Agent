@@ -8,3 +8,5 @@ __pycache__/
 
 # Just in case different Python versions
 *.cpython-*
+
+resumes/

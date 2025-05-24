@@ -1,5 +1,5 @@
 import flask
-from flask import Flask, jsonify, render_template, request, redirect, url_for
+from flask import Flask, jsonify, render_template, request, redirect, url_for, send_from_directory
 import mysql.connector
 import PyPDF2
 import requests
@@ -68,6 +68,10 @@ def connect_graph():
 def auth_login():
     print("Initiating OAuth login")
     return redirect(get_auth_url())
+
+@app.route('/resumes/<path:filename>')
+def get_resume(filename):
+    return send_from_directory('resumes', filename)
 
 # OAuth 2.0 callback route
 @app.route('/oauth2/callback')
