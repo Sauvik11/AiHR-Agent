@@ -102,6 +102,79 @@ def oauth_callback():
         print(f"Error in OAuth callback: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
+def extract_text_from_pdf(path):
+    try:
+        with open(path, "rb") as f:
+            reader = PyPDF2.PdfReader(f)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() + "\n"
+            return text
+    except Exception as e:
+        print(f"Error extracting PDF text: {e}")
+        return ""
+
+def ask_openai(resume_text, user_message):
+    headers = {
+        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    system_prompt = (
+        "You are an AI HR assistant. Use the following resume text to answer questions "
+        "about the candidate's suitability, skills, and fit. Only use provided data. If info is missing, say 'not specified'.\n\n"
+        f"Resume Context:\n{resume_text[:3000]}"
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_message},
+    ]
+
+    payload = {
+        "model": OPENAI_MODEL,
+        "messages": messages,
+        "max_tokens": 500,
+        "temperature": 0.5
+    }
+
+    for _ in range(3):
+        try:
+            res = requests.post(OPENAI_API_URL, headers=headers, json=payload)
+            if res.status_code == 200:
+                return res.json()["choices"][0]["message"]["content"]
+            elif res.status_code == 429:
+                time.sleep(5)
+            else:
+                break
+        except requests.RequestException:
+            time.sleep(3)
+
+    return "Unable to process request currently."
+
+@app.route("/api/ask_ai", methods=["POST"])
+def ask_ai():
+    data = request.get_json()
+    user_message = data.get("message", "")
+    resume_path = data.get("resume_path", "")
+
+    if not user_message or not resume_path:
+        return jsonify({"response": "Missing message or resume_path"}), 400
+
+    # Assuming resume files are stored under ./resumes/
+    resume_full_path = os.path.join("resumes", os.path.basename(resume_path))
+
+    if not os.path.isfile(resume_full_path):
+        return jsonify({"response": "Resume file not found"}), 404
+
+    resume_text = extract_text_from_pdf(resume_full_path)
+
+    if not resume_text.strip():
+        return jsonify({"response": "Unable to extract text from resume."}), 500
+
+    ai_response = ask_openai(resume_text, user_message)
+    return jsonify({"response": ai_response})
+
 # Extract text from PDF resume
 def extract_resume_text(pdf_path):
     try:
@@ -462,8 +535,8 @@ def process_emails():
                 
                 # Insert into database
                 query = """
-                    INSERT INTO candidates (name, position, qualifications, experience_years, skills, previous_experience, interview_status, application_date)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO candidates (name, position, qualifications, experience_years, skills, previous_experience, interview_status, application_date, resume_path)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """
                 values = (
                     candidate['name'],
@@ -473,8 +546,10 @@ def process_emails():
                     ', '.join(candidate['skills']),
                     ', '.join(candidate['previous_experience']),
                     candidate['interview_status'],
-                    datetime.now()
+                    datetime.now(),
+                    attachment_path  # 🆕 Added resume path here
                 )
+
                 cursor.execute(query, values)
                 db.commit()
                 
