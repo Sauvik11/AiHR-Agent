@@ -1,2 +1,10 @@
 .env
 tokens.json
+venv/
+
+# Ignore Python cache files
+__pycache__/
+*.py[cod]
+
+# Just in case different Python versions
+*.cpython-*
