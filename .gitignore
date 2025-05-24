@@ -4,10 +4,11 @@ tokens.json
 venv/
 
 # Ignore Python cache files
-_pycache_/
-*.py[cod]
 
 # Just in case different Python versions
-.cpython-
+*.cpython-*
+=======
+_pycache_/
+*.py[cod]
 
 resumes/
