@@ -1,4 +1,6 @@
 **HR Agent Dashboard**
+
+
 The HR Agent Dashboard is a web application designed to streamline the recruitment process by automating candidate data extraction from emails and providing an interactive interface for HR professionals to manage and evaluate candidates. Built with a Flask backend and a responsive Bootstrap frontend, it integrates with Outlook for email processing, MySQL for data storage, and OpenAI for AI-powered candidate analysis.
 Features
 
