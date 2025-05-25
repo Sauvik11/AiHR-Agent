@@ -185,4 +185,4 @@ Open a Pull Request.
 Please include tests and update documentation as needed.
 
 
-For questions or feedback, reach out via GitHub Issues or email at [your-email@example.com].
+For questions or feedback, reach out via GitHub Issues or email at m.sauvik11@gmail.com.
