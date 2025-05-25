@@ -156,14 +156,22 @@ VALUES ('Ishan Ravi', 'Software Engineer', 'B.S. Computer Science', 5, 'Python, 
 
 Project Structure
 hr-agent-dashboard/
+
 ├── app.py                  # Flask backend
+
 ├── auth.py                 # OAuth handling for Microsoft Graph
+
 ├── templates/
 │   └── index.html          # Frontend (table, modals, expandable rows)
+
 ├── resumes/                # Stores candidate resume PDFs
+
 ├── .env                    # Environment variables
+
 ├── requirements.txt        # Python dependencies
+
 └── README.md               # Project documentation
+
 
 Contributing
 Contributions are welcome! To contribute:
